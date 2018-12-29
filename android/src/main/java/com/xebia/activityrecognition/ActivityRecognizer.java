@@ -25,31 +25,30 @@ import com.facebook.react.bridge.ReactApplicationContext;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
-import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.GoogleApiClient.ConnectionCallbacks;
 import com.google.android.gms.common.api.GoogleApiClient.OnConnectionFailedListener;
 import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.location.ActivityRecognition;
+import com.google.android.gms.location.ActivityRecognitionResult;
+import com.google.android.gms.location.ActivityRecognitionClient;
 import com.google.android.gms.location.DetectedActivity;
 
-import java.util.Collections;
+import java.util.List;
 import android.arch.persistence.room.Room;
 import java.util.Comparator;
-import java.util.List;
+import java.util.Collections;
+import java.util.Date;
 
-public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFailedListener, ResultCallback<Status>,
-        Comparator<DetectedActivity> {
+public class ActivityRecognizer implements OnConnectionFailedListener, Comparator<DetectedActivity> {
     protected static final String TAG = ActivityRecognizer.class.getSimpleName();
     protected ActivityDetectionBroadcastReceiver mBroadcastReceiver;
     private Context mContext;
     private ReactContext mReactContext;
-    private GoogleApiClient mGoogleApiClient;
+    private ActivityRecognitionClient mArclient;
+    private PendingIntent pIntent;
     private GoogleApiAvailability mGoogleApiAvailability;
     private ActivityCache.AppDatabase mAppDatabase;
-    private boolean connected;
-    private boolean started;
-    private long interval;
     private Timer mockTimer;
 
     public ActivityRecognizer(ReactApplicationContext reactContext) {
@@ -57,33 +56,28 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         mContext = reactContext.getApplicationContext();
         mAppDatabase = Room.databaseBuilder(mContext, ActivityCache.AppDatabase.class, "activity_db").build();
         mReactContext = reactContext;
-        connected = false;
-        started = false;
 
         if (checkPlayServices()) {
             mBroadcastReceiver = new ActivityDetectionBroadcastReceiver();
-            mGoogleApiClient = new GoogleApiClient.Builder(mContext).addApi(ActivityRecognition.API)
-                    .addConnectionCallbacks(this).addOnConnectionFailedListener(this).build();
+            mArclient = ActivityRecognition.getClient(mContext);
         }
     }
 
     // Subscribe to activity updates. If not connected to Google Play Services,
     // connect first and try again from the onConnected callback.
     public void start(long detectionIntervalMillis) {
-        if (mGoogleApiClient == null) {
+        if (mArclient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
         }
 
-        interval = detectionIntervalMillis;
-        if (!connected) {
-            mGoogleApiClient.connect();
-            LocalBroadcastManager.getInstance(mContext).registerReceiver(mBroadcastReceiver,
-                    new IntentFilter(DetectionService.BROADCAST_ACTION));
-        } else if (!started) {
-            ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(mGoogleApiClient, detectionIntervalMillis,
-                    getActivityDetectionPendingIntent()).setResultCallback(this);
-            started = true;
-        }
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(DetectionService.BROADCAST_ACTION);
+        mContext.registerReceiver(mBroadcastReceiver, filter);
+
+        Log.i(TAG, "Adding intent to bradcast");
+        Intent intent = new Intent(mContext, DetectionService.class);
+        pIntent = PendingIntent.getService(mContext, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
+        mArclient.requestActivityUpdates(detectionIntervalMillis, pIntent);
     }
 
     // Subscribe to mock activity updates.
@@ -99,35 +93,22 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
             }
         }, 0, detectionIntervalMillis);
 
-        started = true;
     }
 
     // Unsubscribe from mock activity updates.
     public void stopMocked() {
-        if (started) {
-            mockTimer.cancel();
-            started = false;
-        }
+        mockTimer.cancel();
     }
 
     // Unsubscribe from activity updates and disconnect from Google Play Services.
     // Also called when connection failed.
     public void stop() {
-        if (mGoogleApiClient == null) {
+        if (mArclient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
         }
 
-        if (started) {
-            ActivityRecognition.ActivityRecognitionApi
-                    .removeActivityUpdates(mGoogleApiClient, getActivityDetectionPendingIntent())
-                    .setResultCallback(this);
-            started = false;
-        }
-        if (connected) {
-            LocalBroadcastManager.getInstance(mContext).unregisterReceiver(mBroadcastReceiver);
-            mGoogleApiClient.disconnect();
-            connected = false;
-        }
+        mArclient.removeActivityUpdates(pIntent);
+        mContext.unregisterReceiver(mBroadcastReceiver);
     }
 
     // Verify Google Play Services availability
@@ -146,37 +127,13 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
     }
 
     // Implement GoogleApiClient.ConnectionCallbacks
-    public void onConnected(Bundle connectionHint) {
-        Log.d(TAG, "GoogleApiClient connected");
-        connected = true;
-        start(interval);
-    }
-
-    // Implement GoogleApiClient.ConnectionCallbacks
     public void onConnectionSuspended(int cause) {
         Log.i(TAG, "GoogleApiClient connection suspended, reconnecting...");
-        mGoogleApiClient.connect();
     }
 
     // Implement GoogleApiClient.OnConnectionFailedListener
     public void onConnectionFailed(ConnectionResult result) {
         Log.e(TAG, "GoogleApiClient connection failed: " + result.getErrorCode());
-        mGoogleApiClient.connect();
-    }
-
-    // Implement ResultCallback<Status>
-    public void onResult(Status status) {
-        if (status.isSuccess()) {
-            Log.d(TAG, "Succesfully added or removed activity detection updates");
-        } else {
-            Log.e(TAG, "Error adding or removing activity detection updates: " + status.getStatusMessage());
-        }
-    }
-
-    // Create a PendingIntent to be sent for each activity detection
-    private PendingIntent getActivityDetectionPendingIntent() {
-        Intent intent = new Intent(mContext, DetectionService.class);
-        return PendingIntent.getService(mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     // Create key-value map with activity recognition result
@@ -185,7 +142,7 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         for (DetectedActivity activity : detectedActivities) {
             params.putInt(DetectionService.getActivityString(activity.getType()), activity.getConfidence());
         }
-        this.cacheResult(detectedActivities);
+        cacheResult(detectedActivities);
         sendEvent("DetectedActivity", params);
     }
 
@@ -194,7 +151,6 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         Collections.sort(detectedActivities, this);
         entity.activityDateTime = new Date();
         entity.activityType = detectedActivities.get(0).getType();
-        // mAppDatabase.activityEntryDao().insert(entity);
         ActivityCache.Insert(mAppDatabase, entity);
     }
 
@@ -219,9 +175,6 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         }
     }
 
-    // Listen to events broadcasted by the DetectionService
-    // public class ActivityDetectionBroadcastReceiver extends
-    // WakefulBroadcastReceiver {
     public class ActivityDetectionBroadcastReceiver extends BroadcastReceiver {
         protected static final String TAG = "ActivityDetectionBroadcastReceiver";
 
