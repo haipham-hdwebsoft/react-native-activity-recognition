@@ -206,6 +206,10 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         ActivityCache.GetHistory(mAppDatabase, fromDateTime, toDateTime, response);
     }
 
+    public void clearHistory() {
+        ActivityCache.DeleteAll(mAppDatabase);
+    }
+
     // Send result back to JavaScript land
     private void sendEvent(String eventName, @Nullable WritableMap params) {
         try {

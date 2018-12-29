@@ -33,6 +33,18 @@ const ActivityRecognition = {
     })
   },
 
+  clearHistory() {
+    return new Promise((resolve, reject) => {
+      try {
+        ActivityRecognitionNative.clearHistory()
+        resolve()
+      }
+      catch (error) {
+        reject(error)
+      }
+    })
+  },
+
   startMocked(detectionIntervalMs, mockActivityType) {
     return new Promise((resolve, reject) => {
       ActivityRecognitionNative.startMockedWithCallback(detectionIntervalMs, mockActivityType, resolve, logAndReject.bind(null, reject))

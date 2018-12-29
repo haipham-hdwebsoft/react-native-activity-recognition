@@ -32,6 +32,9 @@ public class ActivityCache {
 
         @Delete
         void delete(ActivityEntry activityEntry);
+
+        @Query("DELETE FROM activityEntry")
+        void deleteAll();
     }
 
     @Database(entities = { ActivityEntry.class }, version = 1, exportSchema = false)
@@ -91,6 +94,24 @@ public class ActivityCache {
         @Override
         protected void onPostExecute(List<ActivityCache.ActivityEntry> result) {
             delegate.processFinish(result);
+        }
+    }
+
+    public static void DeleteAll(AppDatabase appDb) {
+        new InsertAsyncTask(appDb, entity).execute();
+    }
+
+    private static class DeleteAllAsyncTask extends AsyncTask<Void, Void, Void> {
+        private AppDatabase appDatabase;
+
+        private InsertAsyncTask(AppDatabase appDb) {
+            appDatabase = appDb;            
+        }
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            appDatabase.activityEntryDao().deleteAll();
+            return null;
         }
     }
 }

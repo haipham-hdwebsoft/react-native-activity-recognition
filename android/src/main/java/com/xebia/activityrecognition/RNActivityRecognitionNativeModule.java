@@ -105,6 +105,11 @@ public class RNActivityRecognitionNativeModule extends ReactContextBaseJavaModul
     }
 
     @ReactMethod
+    public void clearHistory() {
+        mActivityRecognizer.clearHistory();
+    }
+
+    @ReactMethod
     public void stopMockedWithCallback(final Callback onSuccess, final Callback onError) {
         if (mActivityRecognizer != null) {
             mActivityRecognizer.stopMocked();
