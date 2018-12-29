@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.support.annotation.Nullable;
 import android.support.v4.content.LocalBroadcastManager;
+import android.support.v4.content.WakefulBroadcastReceiver;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -32,13 +33,20 @@ import com.google.android.gms.common.api.Status;
 import com.google.android.gms.location.ActivityRecognition;
 import com.google.android.gms.location.DetectedActivity;
 
-public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFailedListener, ResultCallback<Status> {
+import java.util.Collections;
+import android.arch.persistence.room.Room;
+import java.util.Comparator;
+import java.util.List;
+
+public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFailedListener, ResultCallback<Status>,
+        Comparator<DetectedActivity> {
     protected static final String TAG = ActivityRecognizer.class.getSimpleName();
     protected ActivityDetectionBroadcastReceiver mBroadcastReceiver;
     private Context mContext;
     private ReactContext mReactContext;
     private GoogleApiClient mGoogleApiClient;
     private GoogleApiAvailability mGoogleApiAvailability;
+    private ActivityCache.AppDatabase mAppDatabase;
     private boolean connected;
     private boolean started;
     private long interval;
@@ -47,21 +55,20 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
     public ActivityRecognizer(ReactApplicationContext reactContext) {
         mGoogleApiAvailability = GoogleApiAvailability.getInstance();
         mContext = reactContext.getApplicationContext();
+        mAppDatabase = Room.databaseBuilder(mContext, ActivityCache.AppDatabase.class, "activity_db").build();
         mReactContext = reactContext;
         connected = false;
         started = false;
 
         if (checkPlayServices()) {
             mBroadcastReceiver = new ActivityDetectionBroadcastReceiver();
-            mGoogleApiClient = new GoogleApiClient.Builder(mContext)
-                .addApi(ActivityRecognition.API)
-                .addConnectionCallbacks(this)
-                .addOnConnectionFailedListener(this)
-                .build();
+            mGoogleApiClient = new GoogleApiClient.Builder(mContext).addApi(ActivityRecognition.API)
+                    .addConnectionCallbacks(this).addOnConnectionFailedListener(this).build();
         }
     }
 
-    // Subscribe to activity updates. If not connected to Google Play Services, connect first and try again from the onConnected callback.
+    // Subscribe to activity updates. If not connected to Google Play Services,
+    // connect first and try again from the onConnected callback.
     public void start(long detectionIntervalMillis) {
         if (mGoogleApiClient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
@@ -70,13 +77,11 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         interval = detectionIntervalMillis;
         if (!connected) {
             mGoogleApiClient.connect();
-            LocalBroadcastManager.getInstance(mContext).registerReceiver(mBroadcastReceiver, new IntentFilter(DetectionService.BROADCAST_ACTION));
+            LocalBroadcastManager.getInstance(mContext).registerReceiver(mBroadcastReceiver,
+                    new IntentFilter(DetectionService.BROADCAST_ACTION));
         } else if (!started) {
-            ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(
-                mGoogleApiClient,
-                detectionIntervalMillis,
-                getActivityDetectionPendingIntent()
-            ).setResultCallback(this);
+            ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(mGoogleApiClient, detectionIntervalMillis,
+                    getActivityDetectionPendingIntent()).setResultCallback(this);
             started = true;
         }
     }
@@ -105,17 +110,17 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         }
     }
 
-    // Unsubscribe from activity updates and disconnect from Google Play Services. Also called when connection failed.
+    // Unsubscribe from activity updates and disconnect from Google Play Services.
+    // Also called when connection failed.
     public void stop() {
         if (mGoogleApiClient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
         }
 
         if (started) {
-            ActivityRecognition.ActivityRecognitionApi.removeActivityUpdates(
-                mGoogleApiClient,
-                getActivityDetectionPendingIntent()
-            ).setResultCallback(this);
+            ActivityRecognition.ActivityRecognitionApi
+                    .removeActivityUpdates(mGoogleApiClient, getActivityDetectionPendingIntent())
+                    .setResultCallback(this);
             started = false;
         }
         if (connected) {
@@ -156,8 +161,7 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
     // Implement GoogleApiClient.OnConnectionFailedListener
     public void onConnectionFailed(ConnectionResult result) {
         Log.e(TAG, "GoogleApiClient connection failed: " + result.getErrorCode());
-        connected = false;
-        stop();
+        mGoogleApiClient.connect();
     }
 
     // Implement ResultCallback<Status>
@@ -171,8 +175,8 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
 
     // Create a PendingIntent to be sent for each activity detection
     private PendingIntent getActivityDetectionPendingIntent() {
-        Intent intent = new Intent(mReactContext, DetectionService.class);
-        return PendingIntent.getService(mReactContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        Intent intent = new Intent(mContext, DetectionService.class);
+        return PendingIntent.getService(mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     // Create key-value map with activity recognition result
@@ -181,7 +185,25 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
         for (DetectedActivity activity : detectedActivities) {
             params.putInt(DetectionService.getActivityString(activity.getType()), activity.getConfidence());
         }
+        this.cacheResult(detectedActivities);
         sendEvent("DetectedActivity", params);
+    }
+
+    private void cacheResult(ArrayList<DetectedActivity> detectedActivities) {
+        ActivityCache.ActivityEntry entity = new ActivityCache.ActivityEntry();
+        Collections.sort(detectedActivities, this);
+        entity.activityDateTime = new Date();
+        entity.activityType = detectedActivities.get(0).getType();
+        // mAppDatabase.activityEntryDao().insert(entity);
+        ActivityCache.Insert(mAppDatabase, entity);
+    }
+
+    public int compare(DetectedActivity a, DetectedActivity b) {
+        return b.getConfidence() - a.getConfidence();
+    }
+
+    public void getHistory(Date fromDateTime, Date toDateTime, ActivityCache.GetHistoryAsyncResponse response) {
+        ActivityCache.GetHistory(mAppDatabase, fromDateTime, toDateTime, response);
     }
 
     // Send result back to JavaScript land
@@ -194,13 +216,16 @@ public class ActivityRecognizer implements ConnectionCallbacks, OnConnectionFail
     }
 
     // Listen to events broadcasted by the DetectionService
+    // public class ActivityDetectionBroadcastReceiver extends
+    // WakefulBroadcastReceiver {
     public class ActivityDetectionBroadcastReceiver extends BroadcastReceiver {
         protected static final String TAG = "ActivityDetectionBroadcastReceiver";
 
         @Override
         public void onReceive(Context context, Intent intent) {
             Log.d(TAG, "Received activity update");
-            ArrayList<DetectedActivity> updatedActivities = intent.getParcelableArrayListExtra(DetectionService.ACTIVITY_EXTRA);
+            ArrayList<DetectedActivity> updatedActivities = intent
+                    .getParcelableArrayListExtra(DetectionService.ACTIVITY_EXTRA);
             onUpdate(updatedActivities);
         }
     }

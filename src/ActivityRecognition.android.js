@@ -26,6 +26,13 @@ const ActivityRecognition = {
     });
   },
 
+  // getHistory: get cached history
+  getHistory({ startDate, endDate }) {
+    return new Promise((resolve, reject) => {
+      ActivityRecognitionNative.getHistory(startDate, endDate, resolve, logAndReject.bind(null, reject))
+    })
+  },
+
   startMocked(detectionIntervalMs, mockActivityType) {
     return new Promise((resolve, reject) => {
       ActivityRecognitionNative.startMockedWithCallback(detectionIntervalMs, mockActivityType, resolve, logAndReject.bind(null, reject))

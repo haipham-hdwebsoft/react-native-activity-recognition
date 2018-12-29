@@ -1,15 +1,13 @@
 package com.xebia.activityrecognition;
 
-import com.facebook.react.bridge.NativeModule;
-import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.bridge.ReactContext;
-import com.facebook.react.bridge.ReactContextBaseJavaModule;
-import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.Callback;
+import com.facebook.react.bridge.*;
 import com.google.android.gms.location.DetectedActivity;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
+import java.text.SimpleDateFormat;
+import java.text.ParseException;
 
 public class RNActivityRecognitionNativeModule extends ReactContextBaseJavaModule {
     private static final String REACT_CLASS = "ActivityRecognition";
@@ -55,7 +53,8 @@ public class RNActivityRecognitionNativeModule extends ReactContextBaseJavaModul
     }
 
     @ReactMethod
-    public void startMockedWithCallback(int detectionIntervalMillis, int mockActivityType, final Callback onSuccess, final Callback onError) {
+    public void startMockedWithCallback(int detectionIntervalMillis, int mockActivityType, final Callback onSuccess,
+            final Callback onError) {
         if (mActivityRecognizer == null) {
             mActivityRecognizer = new ActivityRecognizer(mReactContext);
         }
@@ -63,6 +62,46 @@ public class RNActivityRecognitionNativeModule extends ReactContextBaseJavaModul
         mActivityRecognizer.startMocked((long) detectionIntervalMillis, mockActivityType);
 
         onSuccess.invoke();
+    }
+
+    @ReactMethod
+    public void getHistory(String startDate, String endDate, final Callback onSuccess, final Callback onFailure) {
+        final SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+        try {
+            mActivityRecognizer.getHistory(format.parse(startDate), format.parse(endDate),
+                    new ActivityCache.GetHistoryAsyncResponse() {
+                        @Override
+                        public void processFinish(List<ActivityCache.ActivityEntry> resList) {
+                            WritableArray entryList = new WritableNativeArray();
+
+                            try {
+                                if (mActivityRecognizer != null) {
+
+                                    for (int i = 0; i < resList.size(); i++) {
+                                        ActivityCache.ActivityEntry activityEntry = resList.get(i);
+                                        WritableMap entry = new WritableNativeMap();
+                                        entry.putString("activityDateTime",
+                                                format.format(activityEntry.activityDateTime));
+                                        entry.putString("activityType",
+                                                DetectionService.getActivityString(activityEntry.activityType));
+                                        entryList.pushMap(entry);
+                                    }
+                                } else {
+                                    onFailure.invoke("mActivityRecognizer == null");
+                                    return;
+                                }
+                            } catch (Error e) {
+                                onFailure.invoke(e.getMessage());
+                                return;
+                            }
+
+                            onSuccess.invoke(entryList);
+                        }
+                    });
+        } catch (ParseException e) {
+            onFailure.invoke(e.getMessage());
+            return;
+        }
     }
 
     @ReactMethod
