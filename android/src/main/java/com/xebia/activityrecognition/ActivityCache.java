@@ -98,14 +98,14 @@ public class ActivityCache {
     }
 
     public static void DeleteAll(AppDatabase appDb) {
-        new InsertAsyncTask(appDb, entity).execute();
+        new DeleteAllAsyncTask(appDb).execute();
     }
 
     private static class DeleteAllAsyncTask extends AsyncTask<Void, Void, Void> {
         private AppDatabase appDatabase;
 
-        private InsertAsyncTask(AppDatabase appDb) {
-            appDatabase = appDb;            
+        private DeleteAllAsyncTask(AppDatabase appDb) {
+            appDatabase = appDb;
         }
 
         @Override
