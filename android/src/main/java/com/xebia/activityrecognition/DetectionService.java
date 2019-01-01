@@ -8,15 +8,22 @@ import com.google.android.gms.location.ActivityRecognitionResult;
 import com.google.android.gms.location.DetectedActivity;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import android.arch.persistence.room.Room;
+import java.util.Date;
+import java.util.Collections;
 
-public class DetectionService extends IntentService {
+public class DetectionService extends IntentService implements Comparator<DetectedActivity> {
     protected static final String TAG = DetectionService.class.getSimpleName();
     protected static final String PACKAGE_NAME = DetectionService.class.getPackage().getName();
     protected static final String ACTIVITY_EXTRA = PACKAGE_NAME + ".ACTIVITY_EXTRA";
     protected static final String BROADCAST_ACTION = PACKAGE_NAME + ".BROADCAST_ACTION";
 
+    private ActivityCache.AppDatabase mAppDatabase;
+
     public DetectionService() {
         super(TAG);
+        mAppDatabase = Room.databaseBuilder(this, ActivityCache.AppDatabase.class, "activity_db").build();
     }
 
     @Override
@@ -28,6 +35,8 @@ public class DetectionService extends IntentService {
         for (DetectedActivity da : detectedActivities) {
             Log.d(TAG, getActivityString(da.getType()) + " (" + da.getConfidence() + "%)");
         }
+
+        cacheResult(detectedActivities);
 
         Intent localIntent = new Intent(BROADCAST_ACTION);
         localIntent.putExtra(ACTIVITY_EXTRA, detectedActivities);
@@ -55,6 +64,19 @@ public class DetectionService extends IntentService {
         default:
             return "UNIDENTIFIABLE";
         }
+    }
+
+    private void cacheResult(ArrayList<DetectedActivity> detectedActivities) {
+        Log.d(TAG, "Caching detected activities");
+        ActivityCache.ActivityEntry entity = new ActivityCache.ActivityEntry();
+        Collections.sort(detectedActivities, this);
+        entity.activityDateTime = new Date();
+        entity.activityType = detectedActivities.get(0).getType();
+        ActivityCache.Insert(mAppDatabase, entity);
+    }
+
+    public int compare(DetectedActivity a, DetectedActivity b) {
+        return b.getConfidence() - a.getConfidence();
     }
 
 }

@@ -25,7 +25,6 @@ import com.facebook.react.bridge.ReactApplicationContext;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
-import com.google.android.gms.common.api.GoogleApiClient.ConnectionCallbacks;
 import com.google.android.gms.common.api.GoogleApiClient.OnConnectionFailedListener;
 import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Status;
@@ -40,7 +39,7 @@ import java.util.Comparator;
 import java.util.Collections;
 import java.util.Date;
 
-public class ActivityRecognizer implements OnConnectionFailedListener, Comparator<DetectedActivity> {
+public class ActivityRecognizer implements OnConnectionFailedListener {
     protected static final String TAG = ActivityRecognizer.class.getSimpleName();
     protected ActivityDetectionBroadcastReceiver mBroadcastReceiver;
     private Context mContext;
@@ -51,11 +50,21 @@ public class ActivityRecognizer implements OnConnectionFailedListener, Comparato
     private ActivityCache.AppDatabase mAppDatabase;
     private Timer mockTimer;
 
+    public static boolean isServiceRunning = false;
+
     public ActivityRecognizer(ReactApplicationContext reactContext) {
-        mGoogleApiAvailability = GoogleApiAvailability.getInstance();
         mContext = reactContext.getApplicationContext();
+        init(reactContext.getApplicationContext());
+    }
+
+    public ActivityRecognizer(Context context) {
+        init(context);
+    }
+
+    private void init(Context context) {
+        mContext = context;
+        mGoogleApiAvailability = GoogleApiAvailability.getInstance();
         mAppDatabase = Room.databaseBuilder(mContext, ActivityCache.AppDatabase.class, "activity_db").build();
-        mReactContext = reactContext;
 
         if (checkPlayServices()) {
             mBroadcastReceiver = new ActivityDetectionBroadcastReceiver();
@@ -63,9 +72,22 @@ public class ActivityRecognizer implements OnConnectionFailedListener, Comparato
         }
     }
 
-    // Subscribe to activity updates. If not connected to Google Play Services,
-    // connect first and try again from the onConnected callback.
     public void start(long detectionIntervalMillis) {
+        Log.i(TAG, "Start");
+
+        if (!ActivityRecognizer.isServiceRunning) {
+            Log.i(TAG, "Start foreground service ");
+
+            Intent intent = new Intent(mContext, ActivityService.class);
+            intent.setAction(ActivityService.ACTION_START_FOREGROUND_SERVICE);
+            intent.putExtra(ActivityService.DETECTION_INTERVAL, detectionIntervalMillis);
+            mContext.startService(intent);
+            ActivityRecognizer.isServiceRunning = true;
+        }
+    }
+
+    public void attachReceiver(long detectionIntervalMillis) {
+        Log.i(TAG, "Attach receiver");
         if (mArclient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
         }
@@ -74,7 +96,7 @@ public class ActivityRecognizer implements OnConnectionFailedListener, Comparato
         filter.addAction(DetectionService.BROADCAST_ACTION);
         mContext.registerReceiver(mBroadcastReceiver, filter);
 
-        Log.i(TAG, "Adding intent to bradcast");
+        Log.i(TAG, "Adding intent to broadcast");
         Intent intent = new Intent(mContext, DetectionService.class);
         pIntent = PendingIntent.getService(mContext, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
         mArclient.requestActivityUpdates(detectionIntervalMillis, pIntent);
@@ -103,6 +125,14 @@ public class ActivityRecognizer implements OnConnectionFailedListener, Comparato
     // Unsubscribe from activity updates and disconnect from Google Play Services.
     // Also called when connection failed.
     public void stop() {
+        Log.i(TAG, "Stop foreground service");
+        Intent intent = new Intent(mContext, ActivityService.class);
+        intent.setAction(ActivityService.ACTION_STOP_FOREGROUND_SERVICE);
+        mContext.startService(intent);
+    }
+
+    public void removeReceiver() {
+        Log.i(TAG, "Remove receiver");
         if (mArclient == null) {
             throw new Error("No Google API client. Your device likely doesn't have Google Play Services.");
         }
@@ -137,32 +167,24 @@ public class ActivityRecognizer implements OnConnectionFailedListener, Comparato
     }
 
     // Create key-value map with activity recognition result
-    private void onUpdate(ArrayList<DetectedActivity> detectedActivities) {
+    public void onUpdate(ArrayList<DetectedActivity> detectedActivities) {
         WritableMap params = Arguments.createMap();
         for (DetectedActivity activity : detectedActivities) {
             params.putInt(DetectionService.getActivityString(activity.getType()), activity.getConfidence());
         }
-        cacheResult(detectedActivities);
-        sendEvent("DetectedActivity", params);
-    }
-
-    private void cacheResult(ArrayList<DetectedActivity> detectedActivities) {
-        ActivityCache.ActivityEntry entity = new ActivityCache.ActivityEntry();
-        Collections.sort(detectedActivities, this);
-        entity.activityDateTime = new Date();
-        entity.activityType = detectedActivities.get(0).getType();
-        ActivityCache.Insert(mAppDatabase, entity);
-    }
-
-    public int compare(DetectedActivity a, DetectedActivity b) {
-        return b.getConfidence() - a.getConfidence();
+        // cacheResult(detectedActivities);
+        if (mReactContext != null) { // only if in react context
+            sendEvent("DetectedActivity", params);
+        }
     }
 
     public void getHistory(Date fromDateTime, Date toDateTime, ActivityCache.GetHistoryAsyncResponse response) {
+        Log.d(TAG, "Getting history");
         ActivityCache.GetHistory(mAppDatabase, fromDateTime, toDateTime, response);
     }
 
     public void clearHistory() {
+        Log.e(TAG, "Clearing history");
         ActivityCache.DeleteAll(mAppDatabase);
     }
 
