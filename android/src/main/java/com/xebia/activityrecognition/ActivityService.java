@@ -19,6 +19,7 @@ import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.ReactNativeHost;
 import com.facebook.react.ReactInstanceManager;
 import com.facebook.react.ReactApplication;
+import com.facebook.react.bridge.ReactApplicationContext;
 
 public class ActivityService extends Service {
 
@@ -47,14 +48,14 @@ public class ActivityService extends Service {
             ReactApplication application = (ReactApplication) this.getApplication();
             ReactNativeHost reactNativeHost = application.getReactNativeHost();
             ReactInstanceManager reactInstanceManager = reactNativeHost.getReactInstanceManager();
-            mReactContext = reactInstanceManager.getCurrentReactContext();
+            mReactContext = (ReactApplicationContext) reactInstanceManager.getCurrentReactContext();
             startForegroundService();
             Log.d(TAG, "Foreground service is started");
         } else if (intent.getAction() == ACTION_STOP_FOREGROUND_SERVICE) {
             stopForegroundService();
             Log.d(TAG, "Foreground service is stopped");
         }
-        return START_STICKY;
+        return START_REDELIVER_INTENT;
     }
 
     @Override
@@ -67,8 +68,6 @@ public class ActivityService extends Service {
     private void startForegroundService() {
         Log.d(TAG, "Start foreground service");
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
-
         if (mReactContext != null) {
             Log.d(TAG, "React context found");
             activityRecognizer = new ActivityRecognizer(mReactContext);
@@ -77,6 +76,7 @@ public class ActivityService extends Service {
         activityRecognizer.attachReceiver(interval);
 
         // Build the notification.
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
         Notification notification = builder.build();
 
         // Start foreground service.
