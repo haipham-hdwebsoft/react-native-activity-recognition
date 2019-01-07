@@ -69,6 +69,10 @@ float _timeout = 1.0;
     return @"UNKNOWN";
 }
 
++ (BOOL)requiresMainQueueSetup
+{
+    return YES;
+}
 
 - (NSDictionary *)constantsToExport
 {
